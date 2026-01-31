@@ -1,0 +1,97 @@
+function [sim_matrix,user_file_req_prob] = cal_Movielens(total_users, F, gamma_m,data)
+%% 加载Movielens计算用户偏好相似度
+
+% 提取字段
+user_ids = data(:, 1);
+movie_ids = data(:, 2);
+ratings   = data(:, 3);
+
+% 获取用户数和电影数
+num_users = max(user_ids);
+num_movies = max(movie_ids);
+
+% 构建评分矩阵 R(user, movie)
+R = zeros(num_users, num_movies);
+for i = 1:length(ratings)
+    R(user_ids(i), movie_ids(i)) = ratings(i);
+end
+
+% 归一化评分向量
+R_norm = R ./ sqrt(sum(R.^2, 2));  % 每行（用户）单位向量
+
+% 计算余弦相似度（用户 × 用户）
+sim_matrix = R_norm * R_norm';  % 用户间兴趣相似度矩阵
+
+%% 生成用户的文件请求概率（基于Movielens数据的个性化兴趣）
+user_file_req_prob = zeros(total_users, F);
+
+% 为每个系统用户分配一个Movielens用户ID
+% 如果系统用户数多于Movielens用户数，会有重复映射
+user_movielens_mapping = mod(0:total_users-1, num_users) + 1;
+
+% 为每个系统文件分配一个Movielens电影ID  
+% 如果系统文件数多于Movielens电影数，会有重复映射
+file_movielens_mapping = mod(0:F-1, num_movies) + 1;
+
+for u = 1:total_users
+    % 获取对应的Movielens用户ID
+    movielens_user_id = user_movielens_mapping(u);
+
+    % 获取该用户的所有评分数据
+    user_ratings = R(movielens_user_id, :);
+
+    % 创建文件排序数组
+    file_scores = zeros(F, 1);
+
+    for k = 1:F
+        % 获取对应的Movielens电影ID
+        movielens_movie_id = file_movielens_mapping(k);
+
+        % 获取用户对该电影的评分
+        rating = user_ratings(movielens_movie_id);
+
+        if rating > 0
+            % 如果用户评过分，使用评分作为兴趣分数
+            file_scores(k) = rating;
+        else
+            % 如果用户没评过分，使用该电影的平均评分作为估计
+            movie_ratings = R(:, movielens_movie_id);
+            movie_ratings = movie_ratings(movie_ratings > 0); % 只考虑非零评分
+
+            if ~isempty(movie_ratings)
+                file_scores(k) = mean(movie_ratings);
+            else
+                % 如果该电影完全没有评分，使用全局平均评分
+                all_ratings = R(R > 0);
+                if ~isempty(all_ratings)
+                    file_scores(k) = mean(all_ratings);
+                else
+                    file_scores(k) = 2.5; % 默认中等评分
+                end
+            end
+
+            % 为未评分的电影添加一些随机性，避免所有未评分电影排序完全相同
+            file_scores(k) = file_scores(k) + 0.1 * randn(); % 添加小的随机噪声
+        end
+    end
+
+    % 根据分数对文件进行排序（分数越高，排名越靠前）
+    [~, sorted_indices] = sort(file_scores, 'descend');
+
+    % 创建排名映射：phi_k_ui(k) 表示文件k的排名
+    phi_k_ui = zeros(F, 1);
+    for rank = 1:F
+        file_id = sorted_indices(rank);
+        phi_k_ui(rank) = file_id;
+    end
+
+    % 计算Zipf分布的分母
+    zipf_denominator = sum((1:F).^(-gamma_m));
+
+    % 对每个文件计算请求概率
+    for k = 1:F
+        rank_of_file = find(phi_k_ui == k);
+        user_file_req_prob(u, k) = (rank_of_file^(-gamma_m)) / zipf_denominator;
+    end
+end
+end
